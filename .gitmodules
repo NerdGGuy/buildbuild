@@ -10,3 +10,6 @@
 [submodule "PUSH"]
 	path = PUSH
 	url = git@github.com:NerdGGuy/PUSH.git
+[submodule "PROJ"]
+	path = PROJ
+	url = git@github.com:NerdGGuy/PROJ.git
