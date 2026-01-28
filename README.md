@@ -30,7 +30,7 @@ buildbuild uses standard Git repositories as binary caches with uncompressed NAR
 | Component | Purpose | Details |
 |-----------|---------|---------|
 | [POLL](POLL/README.md) | Change detection | Monitors source repos via GitHub Events API |
-| [PULL](PULL/README.md) | Build orchestration | Nix expressions, variant definitions, CI workflows |
+| [PULL](PULL/README.md) | Build orchestration | Nix flake with variant definitions |
 | [PUSH](PUSH/README.md) | Artifact storage | Git-based binary cache with uncompressed NARs |
 | [POST](POST/README.md) | Status reporting | GitHub Pages dashboard with badges |
 
@@ -52,54 +52,163 @@ buildbuild uses standard Git repositories as binary caches with uncompressed NAR
 ### Building Locally
 
 ```bash
+cd PULL
+
 # Enter development shell
 nix develop
 
 # Build specific variant
 nix build .#release
+nix build .#debug
 nix build .#asan
 
-# Run tests with sanitizer
-nix build .#asan && ./result/bin/test-suite
+# Run tests
+./result/bin/test_calculator
+```
+
+### Full CI Workflow
+
+```bash
+cd PULL
+
+# 1. Update source to latest commit
+./update-variant.sh release
+
+# 2. Build and export all variants
+./export-cache.sh all ./export
+
+# 3. Upload to cache repository
+export CACHE_REPO_TOKEN="ghp_..."
+./upload-cache.sh ./export
+
+# 4. Update status dashboard
+export STATUS_REPO_TOKEN="ghp_..."
+./upload-status.sh ./export
+```
+
+### Running the Poller
+
+```bash
+cd POLL
+
+export repo="NerdGGuy/PROJ"
+export github_token="ghp_..."
+./poll
 ```
 
 ### Using the Cache
 
+Add to your flake.nix:
+
 ```nix
 {
   nixConfig = {
-    extra-substituters = [ "https://raw.githubusercontent.com/ORG/CACHE-REPO/main" ];
-    extra-trusted-public-keys = [ "cache-name:BASE64-PUBLIC-KEY" ];
+    extra-substituters = [ "https://raw.githubusercontent.com/NerdGGuy/PUSH/main" ];
+    extra-trusted-public-keys = [ "buildbuild-cache:BASE64-PUBLIC-KEY" ];
   };
 }
 ```
 
+Then build with automatic cache lookup:
+
 ```bash
-# Automatic cache lookup
-nix build github:org/project#release
+nix build github:NerdGGuy/PROJ#release
 ```
 
 ### Checking Build Status
 
-View the dashboard at `https://ORG.github.io/STATUS-REPO/` or embed badges:
+View the dashboard at `https://NerdGGuy.github.io/POST/` or embed badges:
 
 ```markdown
-![release](https://ORG.github.io/STATUS-REPO/badges/release.svg)
+![release](https://NerdGGuy.github.io/POST/badges/release.svg)
+![asan](https://NerdGGuy.github.io/POST/badges/asan.svg)
 ```
 
 ## Data Flow
 
-1. **POLL** detects changes via GitHub Events API (push, tag, release)
-2. **PULL** updates source definitions and builds all variants in parallel
-3. **PUSH** stores build outputs as uncompressed NARs with content-addressed logs
-4. **POST** publishes status JSON/HTML to GitHub Pages dashboard
+1. **POLL** detects changes via GitHub Events API (push, pull request)
+2. **POLL** sets commit status to "pending" and triggers build
+3. **PULL** updates source definitions and builds all variants
+4. **PULL** exports builds to NAR format
+5. **PUSH** stores build outputs as uncompressed NARs with content-addressed logs
+6. **POST** publishes status JSON/HTML to GitHub Pages dashboard
+7. **POLL** updates commit status to "success" or "failure"
+
+## Repository Structure
+
+```
+buildbuild/
+├── POLL/                    # Change detection
+│   ├── poll                 # Main polling script
+│   └── lib/api.sh           # GitHub API wrapper
+├── PULL/                    # Build orchestration
+│   ├── flake.nix            # Nix flake definition
+│   ├── variants/            # Per-variant configurations
+│   ├── nix/                 # Nix helper modules
+│   ├── toolchains/          # Compiler configurations
+│   └── *.sh                 # CI scripts
+├── PUSH/                    # Binary cache
+│   └── upload.sh            # Upload script
+├── POST/                    # Status dashboard
+│   ├── index.html           # Dashboard page
+│   ├── style.css            # Styling
+│   ├── app.js               # Client-side logic
+│   ├── update.sh            # Status update script
+│   ├── data/                # Status data
+│   └── badges/              # SVG badges
+└── PROJ/                    # Example C++ project
+    ├── src/                 # Source code
+    ├── tests/               # Tests
+    └── Makefile             # Build system
+```
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Component | Description |
+|----------|-----------|-------------|
+| `repo` | POLL | Repository in `owner/repo` format |
+| `github_token` | POLL | GitHub token for API access |
+| `poll_interval` | POLL | Seconds between polls (default: 60) |
+| `GITHUB_TOKEN` | PULL/PUSH/POST | GitHub token for API access |
+| `CACHE_REPO_TOKEN` | PULL/PUSH | Token with write access to cache repo |
+| `STATUS_REPO_TOKEN` | PULL/POST | Token with write access to status repo |
+| `NIX_SIGNING_KEY` | PULL | Secret key for NAR signing |
+
+### PULL Configuration
+
+Edit `PULL/cache/config.json`:
+
+```json
+{
+  "source_repo": {
+    "owner": "NerdGGuy",
+    "repo": "PROJ",
+    "default_ref": "main"
+  },
+  "cache_repo": {
+    "owner": "NerdGGuy",
+    "repo": "PUSH"
+  },
+  "status_repo": {
+    "owner": "NerdGGuy",
+    "repo": "POST"
+  },
+  "signing": {
+    "key_name": "buildbuild-cache",
+    "secret_env": "NIX_SIGNING_KEY"
+  }
+}
+```
 
 ## Requirements
 
 - Bash 4.0+
 - Nix 2.18+ with flakes enabled
-- gh CLI 2.0+
-- curl, jq, timeout (coreutils)
+- curl
+- jq
+- nix-prefetch-github
 
 ## License
 
