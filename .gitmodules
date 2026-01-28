@@ -1,0 +1,12 @@
+[submodule "POLL"]
+	path = POLL
+	url = git@github.com:NerdGGuy/POLL.git
+[submodule "POST"]
+	path = POST
+	url = git@github.com:NerdGGuy/POST.git
+[submodule "PULL"]
+	path = PULL
+	url = git@github.com:NerdGGuy/PULL.git
+[submodule "PUSH"]
+	path = PUSH
+	url = git@github.com:NerdGGuy/PUSH.git
