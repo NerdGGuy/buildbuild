@@ -25,14 +25,58 @@ buildbuild uses standard Git repositories as binary caches with uncompressed NAR
 └──────────────────┘
 ```
 
-## Components
+## Requirements
 
-| Component | Purpose | Details |
-|-----------|---------|---------|
-| [POLL](POLL/README.md) | Change detection | Monitors source repos via GitHub Events API |
-| [PULL](PULL/README.md) | Build orchestration | Nix flake with variant definitions |
-| [PUSH](PUSH/README.md) | Artifact storage | Git-based binary cache with uncompressed NARs |
-| [POST](POST/README.md) | Status reporting | GitHub Pages dashboard with badges |
+- Bash 4.0+
+- [Nix 2.18+](https://nixos.org/download/) with flakes enabled
+- [GitHub CLI](https://cli.github.com/) (`gh`) authenticated, or a `github_token` env var
+
+## Setup
+
+### 1. Clone with submodules
+
+```bash
+git clone --recurse-submodules https://github.com/NerdGGuy/buildbuild.git
+cd buildbuild
+```
+
+### 2. Configure your source repo
+
+Edit `PULL/cache/config.json` to point at your project:
+
+```json
+{
+  "source_repo": {
+    "owner": "YOUR_USER",
+    "repo": "YOUR_PROJECT",
+    "default_ref": "main"
+  },
+  "cache_repo": {
+    "owner": "YOUR_USER",
+    "repo": "YOUR_CACHE_REPO"
+  },
+  "status_repo": {
+    "owner": "YOUR_USER",
+    "repo": "YOUR_STATUS_REPO"
+  }
+}
+```
+
+Also update the `src` input URL in `PULL/flake.nix` to match your source repo.
+
+### 3. Start the daemon
+
+```bash
+./polld start
+```
+
+That's it. The daemon auto-detects your GitHub token from `gh` CLI, polls for pushes and PRs, builds all 8 variants, and updates commit status on GitHub.
+
+To customize:
+
+```bash
+repo="owner/repo" poll_interval=60 build_timeout=7200 ./polld start
+```
 
 ## Build Variants
 
@@ -45,135 +89,85 @@ buildbuild uses standard Git repositories as binary caches with uncompressed NAR
 | `tsan` | Thread sanitizer | Data races, deadlocks |
 | `msan` | Memory sanitizer | Uninitialized values |
 | `coverage` | Code coverage | Test coverage analysis |
-| `fuzz` | Fuzzing | Automated vulnerability discovery |
+| `fuzz` | Fuzzing | Instrumented build for fuzz testing |
 
-## Quick Start
+Each base variant has a corresponding `*-test-run` variant that builds and runs the test suite (e.g., `nix build .#asan-test-run`).
 
-### Building Locally
+## Usage
+
+### Building locally
 
 ```bash
 cd PULL
 
-# Enter development shell
-nix develop
-
-# Build specific variant
+# Build a specific variant
 nix build .#release
-nix build .#debug
 nix build .#asan
 
-# Run tests
-./result/bin/test_calculator
-```
-
-### Full CI Workflow
-
-Start the poll daemon to automatically detect pushes and build all variants:
-
-```bash
-# Set tokens for cache and status uploads (optional)
-export CACHE_REPO_TOKEN="ghp_..."
-export STATUS_REPO_TOKEN="ghp_..."
-
-# Start the daemon
-./polld start
-```
-
-The daemon will:
-1. Poll GitHub Events API for new pushes and PRs
-2. Set commit status to "pending"
-3. Update all variants to the detected commit
-4. Build and export all 8 variants to NAR format
-5. Upload artifacts to the cache repository (if CACHE_REPO_TOKEN is set)
-6. Update the status dashboard (if STATUS_REPO_TOKEN is set)
-7. Set commit status to "success" or "failure"
-
-Override defaults via environment:
-
-```bash
-repo="owner/repo" poll_interval=60 build_timeout=7200 ./polld start
-```
-
-### Managing the Poll Daemon
-
-```bash
-# Start the daemon (auto-detects token from gh CLI)
-./polld start
-
-# Check status
-./polld status
-
-# View recent log output
-./polld log
-./polld log 100    # last 100 lines
-
-# Follow log in real time
-./polld follow
-
-# Stop the daemon
-./polld stop
-
-# Restart
-./polld restart
-```
-
-Override defaults via environment:
-
-```bash
-repo="owner/repo" poll_interval=60 ./polld start
-```
-
-### Running Tests
-
-```bash
-# End-to-end CI pipeline test (requires GitHub token + PROJ write access)
-./test-ci
-
-# Build and run tests for a specific variant
-cd PULL
+# Build and run tests under a variant
 nix build .#release-test-run
 nix build .#asan-test-run
+
+# Enter development shell (includes clang, gcc, cmake, etc.)
+nix develop
 ```
 
-The `test-ci` script:
-1. Pushes a test commit to PROJ
-2. Runs a poll cycle to detect the commit
-3. Builds all 8 variants (via `--override-input src`)
-4. Checks GitHub commit status is set to "success"
+### Managing the daemon
 
-Override defaults via environment:
+```bash
+./polld start          # Start (auto-detects gh token)
+./polld status         # Check if running
+./polld log            # Last 50 lines of output
+./polld log 100        # Last 100 lines
+./polld follow         # Tail logs
+./polld stop           # Stop
+./polld restart        # Restart
+```
+
+### Running the E2E test
+
+The `test-ci` script pushes a test commit, runs a full poll cycle, builds all 8 variants, and verifies the GitHub commit status:
+
+```bash
+./test-ci
+```
+
+Override defaults:
 
 ```bash
 repo="owner/repo" timeout=600 ./test-ci
 ```
 
-### Using the Cache
+### Using the binary cache
 
-Add to your flake.nix:
+Add to your project's `flake.nix`:
 
 ```nix
 {
   nixConfig = {
-    extra-substituters = [ "https://raw.githubusercontent.com/NerdGGuy/PUSH/main" ];
+    extra-substituters = [ "https://raw.githubusercontent.com/YOUR_USER/YOUR_CACHE_REPO/main" ];
     extra-trusted-public-keys = [ "buildbuild-cache:BASE64-PUBLIC-KEY" ];
   };
 }
 ```
 
-Then build with automatic cache lookup:
+### Build status dashboard
 
-```bash
-nix build github:NerdGGuy/PROJ#release
-```
-
-### Checking Build Status
-
-View the dashboard at `https://NerdGGuy.github.io/POST/` or embed badges:
+View at `https://YOUR_USER.github.io/YOUR_STATUS_REPO/` or embed badges:
 
 ```markdown
-![release](https://NerdGGuy.github.io/POST/badges/release.svg)
-![asan](https://NerdGGuy.github.io/POST/badges/asan.svg)
+![release](https://YOUR_USER.github.io/YOUR_STATUS_REPO/badges/release.svg)
+![asan](https://YOUR_USER.github.io/YOUR_STATUS_REPO/badges/asan.svg)
 ```
+
+## Components
+
+| Component | Purpose | Details |
+|-----------|---------|---------|
+| [POLL](POLL/README.md) | Change detection | Monitors source repos via GitHub Events API |
+| [PULL](PULL/README.md) | Build orchestration | Nix flake with variant definitions |
+| [PUSH](PUSH/README.md) | Artifact storage | Git-based binary cache with uncompressed NARs |
+| [POST](POST/README.md) | Status reporting | GitHub Pages dashboard with badges |
 
 ## Data Flow
 
@@ -224,44 +218,10 @@ buildbuild/
 | `repo` | POLL | Repository in `owner/repo` format |
 | `github_token` | POLL | GitHub token for API access |
 | `poll_interval` | POLL | Seconds between polls (default: 60) |
-| `GITHUB_TOKEN` | PULL/PUSH/POST | GitHub token for API access |
 | `CACHE_REPO_TOKEN` | PULL/PUSH | Token with write access to cache repo |
 | `STATUS_REPO_TOKEN` | PULL/POST | Token with write access to status repo |
 | `NIX_SIGNING_KEY` | PULL | Secret key for NAR signing |
-
-### PULL Configuration
-
-Edit `PULL/cache/config.json`:
-
-```json
-{
-  "source_repo": {
-    "owner": "NerdGGuy",
-    "repo": "PROJ",
-    "default_ref": "main"
-  },
-  "cache_repo": {
-    "owner": "NerdGGuy",
-    "repo": "PUSH"
-  },
-  "status_repo": {
-    "owner": "NerdGGuy",
-    "repo": "POST"
-  },
-  "signing": {
-    "key_name": "buildbuild-cache",
-    "secret_env": "NIX_SIGNING_KEY"
-  }
-}
-```
-
-## Requirements
-
-- Bash 4.0+
-- Nix 2.18+ with flakes enabled
-- curl
-- jq
-- nix-prefetch-github
+| `build_timeout` | POLL | Build timeout in seconds (default: 3600) |
 
 ## License
 
