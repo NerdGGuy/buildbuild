@@ -34,9 +34,9 @@ push_test_commit() {
     sed -i "1s|^//.*|// CI test - ${ts}|" "$src"
 
     cd "$PROJ_DIR"
-    git add src/lib/calculator.cpp
-    git commit -m "chore: CI test ${ts}"
-    git push origin main
+    git add src/lib/calculator.cpp >&2
+    git commit -m "chore: CI test ${ts}" >&2
+    git push origin main >&2
 
     git rev-parse HEAD
 }
@@ -46,23 +46,19 @@ run_poll_cycle() {
     local sha="$1"
     local token="$2"
     local short="${sha:0:7}"
-    local log_before
-    log_before="$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)"
 
     echo "Running poll cycle..."
-    repo="$repo" \
+    local output
+    output="$(repo="$repo" \
     github_token="$token" \
     poll_interval="$poll_interval" \
     PULL_DIR="${SCRIPT_DIR}/PULL" \
-        bash -c 'source "'"${POLL_DIR}"'/poll"; validate_config; poll_events'
+        bash -c 'source "'"${POLL_DIR}"'/poll"; validate_config; poll_events' 2>&1 || true)"
+    echo "$output"
 
-    # Check log output for our SHA
-    local new_lines
-    new_lines="$(tail -n +"$((log_before + 1))" "$LOG_FILE" 2>/dev/null || true)"
-
-    if echo "$new_lines" | grep -q "Build succeeded for ${short}"; then
+    if echo "$output" | grep -qF "Build succeeded for ${short}"; then
         return 0
-    elif echo "$new_lines" | grep -q "Build failed for ${short}"; then
+    elif echo "$output" | grep -qF "Build failed for ${short}"; then
         return 1
     fi
 
