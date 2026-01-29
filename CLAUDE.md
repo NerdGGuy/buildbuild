@@ -4,14 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-buildbuild is a webhook-free CI system for Nix-based C++ projects. It polls GitHub's Events API instead of using webhooks, builds 10 variants (release, debug, asan, ubsan, tsan, msan, coverage, fuzz, test-build, test-run), and stores artifacts as uncompressed NAR files in a Git-based binary cache for delta compression.
+buildbuild is a webhook-free CI system for Nix-based C++ projects. It polls GitHub's Events API instead of using webhooks, builds 8 base variants (release, debug, asan, ubsan, tsan, msan, coverage, fuzz) with `*-test-run` variants generated via `makeOverridable` override (e.g., `nix build .#asan-test-run`), and stores artifacts as uncompressed NAR files in a Git-based binary cache for delta compression.
 
 ## Architecture
 
 Five components, each in its own Git submodule:
 
 - **POLL** — Polls GitHub Events API for PushEvent/PullRequestEvent, sets commit status, triggers builds. State tracked in `~/.local/state/poll/`. Skips fork PRs for security.
-- **PULL** — Nix flake that defines all 10 build variants. Shell scripts orchestrate: update source → build → export NAR → upload cache → update status. Config in `PULL/cache/config.json`.
+- **PULL** — Nix flake that defines 8 base build variants plus `*-test-run` overrides. Shell scripts orchestrate: update source → build → export NAR → upload cache → update status. Config in `PULL/cache/config.json`.
 - **PUSH** — Git repo serving as a binary cache. Stores uncompressed NARs (for Git delta compression), content-addressed build logs, and per-variant manifests. Implements the Nix substituter protocol.
 - **POST** — GitHub Pages dashboard with auto-refresh, historical trends, and SVG badges. Data in `POST/data/`.
 - **PROJ** — Example C++ calculator project used for testing. Makefile-based build.
@@ -24,7 +24,8 @@ Data flow: POLL detects push → sets "pending" status → PULL builds all varia
 ```bash
 cd PULL
 nix develop            # Enter dev shell
-nix build .#release    # Build a specific variant (release|debug|asan|ubsan|tsan|msan|coverage|fuzz|test-build|test-run)
+nix build .#release    # Build a specific variant (release|debug|asan|ubsan|tsan|msan|coverage|fuzz)
+nix build .#asan-test-run  # Build and run tests under a variant (append -test-run to any base variant)
 ./result/bin/test_calculator  # Run tests from build output
 ```
 
