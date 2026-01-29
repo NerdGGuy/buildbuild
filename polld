@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# polld - Manage the POLL daemon (start/stop/status/log)
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+POLL_DIR="${SCRIPT_DIR}/POLL"
+RUN_DIR="${XDG_RUNTIME_DIR:-/tmp}/polld"
+PID_FILE="${RUN_DIR}/poll.pid"
+LOG_FILE="${POLL_DIR}/poll.log"
+
+: "${repo:=NerdGGuy/PROJ}"
+: "${poll_interval:=30}"
+
+mkdir -p "$RUN_DIR"
+
+get_token() {
+    if [[ -n "${github_token:-}" ]]; then
+        echo "$github_token"
+        return
+    fi
+    if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
+        gh auth token
+        return
+    fi
+    echo "Error: No github_token set and gh CLI not authenticated" >&2
+    return 1
+}
+
+is_running() {
+    [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
+}
+
+cmd_start() {
+    if is_running; then
+        echo "Poll daemon already running (PID $(cat "$PID_FILE"))"
+        return 1
+    fi
+
+    local token
+    token="$(get_token)"
+
+    echo "Starting poll daemon for ${repo}..."
+    repo="$repo" \
+    github_token="$token" \
+    poll_interval="$poll_interval" \
+        nohup bash "${POLL_DIR}/poll" >> "$LOG_FILE" 2>&1 &
+    local pid=$!
+    echo "$pid" > "$PID_FILE"
+    echo "Poll daemon started (PID ${pid})"
+    echo "Log: ${LOG_FILE}"
+}
+
+cmd_stop() {
+    if ! is_running; then
+        echo "Poll daemon is not running"
+        rm -f "$PID_FILE"
+        return 0
+    fi
+    local pid
+    pid="$(cat "$PID_FILE")"
+    echo "Stopping poll daemon (PID ${pid})..."
+    kill "$pid"
+    rm -f "$PID_FILE"
+    echo "Stopped"
+}
+
+cmd_restart() {
+    cmd_stop || true
+    cmd_start
+}
+
+cmd_status() {
+    if is_running; then
+        echo "Poll daemon is running (PID $(cat "$PID_FILE"))"
+        echo "Repo: ${repo}"
+        echo "Log:  ${LOG_FILE}"
+    else
+        echo "Poll daemon is not running"
+        rm -f "$PID_FILE"
+        return 1
+    fi
+}
+
+cmd_log() {
+    local lines="${1:-50}"
+    if [[ ! -f "$LOG_FILE" ]]; then
+        echo "No log file found at ${LOG_FILE}"
+        return 1
+    fi
+    tail -n "$lines" "$LOG_FILE"
+}
+
+cmd_follow() {
+    if [[ ! -f "$LOG_FILE" ]]; then
+        echo "No log file found at ${LOG_FILE}"
+        return 1
+    fi
+    tail -f "$LOG_FILE"
+}
+
+usage() {
+    cat <<EOF
+Usage: polld <command> [args]
+
+Commands:
+  start     Start the poll daemon
+  stop      Stop the poll daemon
+  restart   Restart the poll daemon
+  status    Show daemon status
+  log [N]   Show last N lines of log (default: 50)
+  follow    Tail the log continuously
+
+Environment:
+  repo            Repository to poll (default: NerdGGuy/PROJ)
+  github_token    GitHub token (auto-detected from gh CLI if unset)
+  poll_interval   Seconds between polls (default: 30)
+EOF
+}
+
+case "${1:-}" in
+    start)   cmd_start ;;
+    stop)    cmd_stop ;;
+    restart) cmd_restart ;;
+    status)  cmd_status ;;
+    log)     cmd_log "${2:-50}" ;;
+    follow)  cmd_follow ;;
+    *)       usage; exit 1 ;;
+esac

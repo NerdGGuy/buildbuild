@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# test-ci - Push a test commit to PROJ and verify the CI pipeline processes it
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJ_DIR="${SCRIPT_DIR}/PROJ"
+POLL_DIR="${SCRIPT_DIR}/POLL"
+LOG_FILE="${POLL_DIR}/poll.log"
+
+: "${repo:=NerdGGuy/PROJ}"
+: "${poll_interval:=15}"
+: "${timeout:=300}"
+
+get_token() {
+    if [[ -n "${github_token:-}" ]]; then
+        echo "$github_token"
+        return
+    fi
+    if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
+        gh auth token
+        return
+    fi
+    echo "Error: No github_token set and gh CLI not authenticated" >&2
+    return 1
+}
+
+# Step 1: Push a test commit to PROJ
+push_test_commit() {
+    local src="${PROJ_DIR}/src/lib/calculator.cpp"
+    local ts
+    ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+    # Update the comment line with a new timestamp
+    sed -i "1s|^//.*|// CI test - ${ts}|" "$src"
+
+    cd "$PROJ_DIR"
+    git add src/lib/calculator.cpp
+    git commit -m "chore: CI test ${ts}"
+    git push origin main
+
+    git rev-parse HEAD
+}
+
+# Step 2: Run one poll cycle and check results
+run_poll_cycle() {
+    local sha="$1"
+    local token="$2"
+    local short="${sha:0:7}"
+    local log_before
+    log_before="$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)"
+
+    echo "Running poll cycle..."
+    repo="$repo" \
+    github_token="$token" \
+    poll_interval="$poll_interval" \
+    PULL_DIR="${SCRIPT_DIR}/PULL" \
+        bash -c 'source "'"${POLL_DIR}"'/poll"; validate_config; poll_events'
+
+    # Check log output for our SHA
+    local new_lines
+    new_lines="$(tail -n +"$((log_before + 1))" "$LOG_FILE" 2>/dev/null || true)"
+
+    if echo "$new_lines" | grep -q "Build succeeded for ${short}"; then
+        return 0
+    elif echo "$new_lines" | grep -q "Build failed for ${short}"; then
+        return 1
+    fi
+
+    # SHA might not have appeared in events yet (GitHub Events API delay)
+    return 2
+}
+
+# Step 3: Poll until our commit is built or timeout
+wait_for_build() {
+    local sha="$1"
+    local token="$2"
+    local short="${sha:0:7}"
+    local deadline=$((SECONDS + timeout))
+
+    echo "Waiting for CI to process ${short} (timeout: ${timeout}s)..."
+
+    while [[ $SECONDS -lt $deadline ]]; do
+        run_poll_cycle "$sha" "$token"
+        local rc=$?
+        if [[ $rc -eq 0 ]]; then
+            return 0
+        elif [[ $rc -eq 1 ]]; then
+            return 1
+        fi
+        echo "Commit ${short} not yet in events, retrying in ${poll_interval}s..."
+        sleep "$poll_interval"
+    done
+
+    echo "Timed out waiting for ${short}"
+    return 1
+}
+
+# Step 4: Verify commit status on GitHub
+check_commit_status() {
+    local sha="$1"
+    local token="$2"
+    local status
+
+    status="$(curl -s \
+        -H "Authorization: Bearer ${token}" \
+        -H "Accept: application/vnd.github+json" \
+        "https://api.github.com/repos/${repo}/commits/${sha}/status" \
+        | jq -r '.state')"
+
+    echo "GitHub commit status: ${status}"
+    [[ "$status" == "success" ]]
+}
+
+main() {
+    echo "=== buildbuild CI Test ==="
+    echo ""
+
+    local token
+    token="$(get_token)"
+
+    echo "1. Pushing test commit to PROJ..."
+    local sha
+    sha="$(push_test_commit)"
+    local short="${sha:0:7}"
+    echo "   Pushed ${short}"
+    echo ""
+
+    echo "2. Polling for build..."
+    if wait_for_build "$sha" "$token"; then
+        echo "   Build succeeded"
+    else
+        echo "   Build FAILED"
+        echo ""
+        echo "=== FAIL ==="
+        exit 1
+    fi
+    echo ""
+
+    echo "3. Verifying commit status..."
+    if check_commit_status "$sha" "$token"; then
+        echo "   Commit status is 'success'"
+    else
+        echo "   Commit status check failed"
+        echo ""
+        echo "=== FAIL ==="
+        exit 1
+    fi
+    echo ""
+
+    echo "=== PASS ==="
+}
+
+main "$@"

@@ -86,14 +86,53 @@ export STATUS_REPO_TOKEN="ghp_..."
 ./upload-status.sh ./export
 ```
 
-### Running the Poller
+### Managing the Poll Daemon
 
 ```bash
-cd POLL
+# Start the daemon (auto-detects token from gh CLI)
+./polld start
 
-export repo="NerdGGuy/PROJ"
-export github_token="ghp_..."
-./poll
+# Check status
+./polld status
+
+# View recent log output
+./polld log
+./polld log 100    # last 100 lines
+
+# Follow log in real time
+./polld follow
+
+# Stop the daemon
+./polld stop
+
+# Restart
+./polld restart
+```
+
+Override defaults via environment:
+
+```bash
+repo="owner/repo" poll_interval=60 ./polld start
+```
+
+### Testing the CI Pipeline
+
+Run an end-to-end test that pushes a commit to PROJ and verifies the poll daemon detects it, builds it, and sets the commit status to success:
+
+```bash
+./test-ci
+```
+
+This will:
+1. Push a test commit to PROJ
+2. Poll GitHub Events API until the push event appears
+3. Trigger a Nix build of the release variant
+4. Verify the GitHub commit status is set to `success`
+
+Override defaults via environment:
+
+```bash
+repo="owner/repo" timeout=600 ./test-ci
 ```
 
 ### Using the Cache
@@ -138,6 +177,8 @@ View the dashboard at `https://NerdGGuy.github.io/POST/` or embed badges:
 
 ```
 buildbuild/
+├── polld                    # Daemon management (start/stop/status/log)
+├── test-ci                  # End-to-end CI pipeline test
 ├── POLL/                    # Change detection
 │   ├── poll                 # Main polling script
 │   └── lib/api.sh           # GitHub API wrapper
