@@ -68,22 +68,30 @@ nix build .#asan
 
 ### Full CI Workflow
 
+Start the poll daemon to automatically detect pushes and build all variants:
+
 ```bash
-cd PULL
-
-# 1. Update source to latest commit
-./update-variant.sh release
-
-# 2. Build and export all variants
-./export-cache.sh all ./export
-
-# 3. Upload to cache repository
+# Set tokens for cache and status uploads (optional)
 export CACHE_REPO_TOKEN="ghp_..."
-./upload-cache.sh ./export
-
-# 4. Update status dashboard
 export STATUS_REPO_TOKEN="ghp_..."
-./upload-status.sh ./export
+
+# Start the daemon
+./polld start
+```
+
+The daemon will:
+1. Poll GitHub Events API for new pushes and PRs
+2. Set commit status to "pending"
+3. Update all variants to the detected commit
+4. Build and export all 8 variants to NAR format
+5. Upload artifacts to the cache repository (if CACHE_REPO_TOKEN is set)
+6. Update the status dashboard (if STATUS_REPO_TOKEN is set)
+7. Set commit status to "success" or "failure"
+
+Override defaults via environment:
+
+```bash
+repo="owner/repo" poll_interval=60 build_timeout=7200 ./polld start
 ```
 
 ### Managing the Poll Daemon
@@ -115,19 +123,23 @@ Override defaults via environment:
 repo="owner/repo" poll_interval=60 ./polld start
 ```
 
-### Testing the CI Pipeline
-
-Run an end-to-end test that pushes a commit to PROJ and verifies the poll daemon detects it, builds it, and sets the commit status to success:
+### Running Tests
 
 ```bash
+# End-to-end CI pipeline test (requires GitHub token + PROJ write access)
 ./test-ci
+
+# Build and run tests for a specific variant
+cd PULL
+nix build .#release-test-run
+nix build .#asan-test-run
 ```
 
-This will:
-1. Push a test commit to PROJ
-2. Poll GitHub Events API until the push event appears
-3. Trigger a Nix build of the release variant
-4. Verify the GitHub commit status is set to `success`
+The `test-ci` script:
+1. Pushes a test commit to PROJ
+2. Runs a poll cycle to detect the commit
+3. Builds all 8 variants (via `--override-input src`)
+4. Checks GitHub commit status is set to "success"
 
 Override defaults via environment:
 

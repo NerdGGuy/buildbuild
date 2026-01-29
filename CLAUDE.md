@@ -11,7 +11,7 @@ buildbuild is a webhook-free CI system for Nix-based C++ projects. It polls GitH
 Five components, each in its own Git submodule:
 
 - **POLL** — Polls GitHub Events API for PushEvent/PullRequestEvent, sets commit status, triggers builds. State tracked in `~/.local/state/poll/`. Skips fork PRs for security.
-- **PULL** — Nix flake that defines 8 base build variants plus `*-test-run` overrides. Shell scripts orchestrate: update source → build → export NAR → upload cache → update status. Config in `PULL/cache/config.json`.
+- **PULL** — Nix flake that defines 8 base build variants plus `*-test-run` overrides. Source is a flake input (`src`), overridden at build time via `--override-input src github:owner/repo/SHA`. Shell scripts orchestrate: build → export NAR → upload cache → update status. Config in `PULL/cache/config.json`.
 - **PUSH** — Git repo serving as a binary cache. Stores uncompressed NARs (for Git delta compression), content-addressed build logs, and per-variant manifests. Implements the Nix substituter protocol.
 - **POST** — GitHub Pages dashboard with auto-refresh, historical trends, and SVG badges. Data in `POST/data/`.
 - **PROJ** — Example C++ calculator project used for testing. Makefile-based build.
@@ -31,11 +31,12 @@ nix build .#asan-test-run  # Build and run tests under a variant (append -test-r
 
 ### Full CI workflow
 ```bash
-cd PULL
-./update-variant.sh release       # Update source to latest commit
-./export-cache.sh all ./export    # Build and export all variants
-./upload-cache.sh ./export        # Upload to cache repo (needs CACHE_REPO_TOKEN)
-./upload-status.sh ./export       # Update dashboard (needs STATUS_REPO_TOKEN)
+# Set tokens for cache and status uploads (optional)
+export CACHE_REPO_TOKEN="ghp_..."
+export STATUS_REPO_TOKEN="ghp_..."
+
+# Start the daemon — polls, builds all 8 variants, exports, uploads
+./polld start
 ```
 
 ### Poll daemon management
@@ -48,11 +49,11 @@ cd PULL
 ./polld restart        # Restart
 ```
 
-Override defaults: `repo="owner/repo" poll_interval=60 ./polld start`
+Override defaults: `repo="owner/repo" poll_interval=60 build_timeout=7200 ./polld start`
 
 ### End-to-end test
 ```bash
-./test-ci              # Pushes test commit to PROJ, verifies poll detects and builds it
+./test-ci              # Pushes test commit to PROJ, verifies all 8 variants build
 ```
 
 ## Key Environment Variables
@@ -79,6 +80,5 @@ Override defaults: `repo="owner/repo" poll_interval=60 ./polld start`
 - `PULL/flake.nix` — Central Nix flake defining all build outputs
 - `PULL/cache/config.json` — Repository configuration (source, cache, status repos)
 - `PULL/variants/*/default.nix` — Per-variant build overrides (toolchain, flags)
-- `PULL/variants/*/source.json` — Tracks current source commit per variant
 - `PULL/nix/base.nix` — Base package definition; `builder.nix` — CMake/Meson helpers
 - `POLL/poll` — Main polling loop; `POLL/lib/api.sh` — GitHub API wrapper
