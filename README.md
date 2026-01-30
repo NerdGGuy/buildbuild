@@ -241,7 +241,19 @@ repo="owner/repo" timeout=600 ./test-ci
 
 ### Using the binary cache
 
-Add your cache repo as a Nix substituter in your project's `flake.nix`:
+The PUSH repository implements the [Nix binary cache protocol](https://nixos.org/manual/nix/stable/store/types/http-binary-cache-store.html) and can be used as a substituter. When configured, Nix checks the cache before building and fetches cached artifacts when available.
+
+The cache URL is your repository's raw content URL:
+
+```
+https://raw.githubusercontent.com/YOUR_USER/YOUR_CACHE_REPO/main
+```
+
+Nix resolves store paths by fetching `<hash>.narinfo` from the root, then downloads the corresponding `nar/<hash>.nar` file referenced in the narinfo.
+
+#### Option 1: In your project's `flake.nix`
+
+Add `nixConfig` so anyone using the flake gets the cache automatically:
 
 ```nix
 {
@@ -253,10 +265,69 @@ Add your cache repo as a Nix substituter in your project's `flake.nix`:
       "buildbuild-cache:YOUR_BASE64_PUBLIC_KEY"
     ];
   };
+
+  # ... rest of flake
 }
 ```
 
-Nix will then transparently fetch cached build outputs instead of rebuilding them.
+Nix prompts the user to accept the substituter on first use. To accept without prompting, users can add the URL to `trusted-substituters` in their `nix.conf` (see Option 2).
+
+#### Option 2: In `nix.conf` (system-wide or per-user)
+
+Add to `/etc/nix/nix.conf` or `~/.config/nix/nix.conf`:
+
+```
+extra-substituters = https://raw.githubusercontent.com/YOUR_USER/YOUR_CACHE_REPO/main
+extra-trusted-public-keys = buildbuild-cache:YOUR_BASE64_PUBLIC_KEY
+```
+
+This applies to all builds on the system, not just a single flake.
+
+#### Option 3: Per-command
+
+Pass the substituter on the command line:
+
+```bash
+nix build .#release \
+  --extra-substituters "https://raw.githubusercontent.com/YOUR_USER/YOUR_CACHE_REPO/main" \
+  --extra-trusted-public-keys "buildbuild-cache:YOUR_BASE64_PUBLIC_KEY"
+```
+
+#### Private cache repositories
+
+For private cache repos, Nix needs authentication. Set the `netrc-file` option to a file containing GitHub credentials:
+
+```bash
+# ~/.config/nix/netrc
+machine raw.githubusercontent.com
+login YOUR_GITHUB_USERNAME
+password ghp_YOUR_TOKEN
+```
+
+Then in `nix.conf`:
+
+```
+netrc-file = /home/YOUR_USER/.config/nix/netrc
+```
+
+The token needs `read:packages` scope (or `repo` scope for private repos).
+
+#### Verifying the cache
+
+Check that Nix can see the cache:
+
+```bash
+# Verify the cache is reachable
+curl -sf https://raw.githubusercontent.com/YOUR_USER/YOUR_CACHE_REPO/main/nix-cache-info
+
+# Query a specific store path from the cache
+nix path-info --store https://raw.githubusercontent.com/YOUR_USER/YOUR_CACHE_REPO/main /nix/store/HASH-NAME
+
+# Build with verbose substituter output to confirm cache hits
+nix build .#release -v 2>&1 | grep "copying path"
+```
+
+See [PUSH/README.md](PUSH/README.md) for full details on cache layout, the narinfo format, signing, and upload configuration.
 
 ### Dashboard and badges
 
