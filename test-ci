@@ -11,6 +11,9 @@ LOG_FILE="${POLL_DIR}/poll.log"
 : "${poll_interval:=15}"
 : "${timeout:=300}"
 
+CACHE_BASE="https://raw.githubusercontent.com/NerdGGuy/PUSH/main"
+VARIANTS=(release debug asan ubsan tsan msan coverage fuzz)
+
 get_token() {
     if [[ -n "${github_token:-}" ]]; then
         echo "$github_token"
@@ -96,7 +99,69 @@ wait_for_build() {
     return 1
 }
 
-# Step 4: Verify commit status on GitHub
+# Step 4: Verify PUSH cache contains artifacts for our commit
+check_nix_cache() {
+    local sha="$1"
+    local short="${sha:0:7}"
+    local failed=0
+
+    # 4a: Check that each variant manifest points to our commit
+    echo "   Checking manifests..."
+    for variant in "${VARIANTS[@]}"; do
+        local manifest_url="${CACHE_BASE}/manifests/${variant}.json"
+        local manifest
+        manifest="$(curl -sf "$manifest_url" 2>/dev/null)" || {
+            echo "   FAIL: ${variant} manifest not found"
+            failed=1
+            continue
+        }
+        local cached_rev
+        cached_rev="$(echo "$manifest" | jq -r '.rev')"
+        if [[ "$cached_rev" != "$sha" ]]; then
+            echo "   FAIL: ${variant} manifest rev ${cached_rev:0:7} != ${short}"
+            failed=1
+        else
+            echo "   OK: ${variant} manifest matches ${short}"
+        fi
+    done
+
+    # 4b: Check that narinfo files exist for each variant
+    echo "   Checking narinfo files..."
+    for variant in "${VARIANTS[@]}"; do
+        local manifest_url="${CACHE_BASE}/manifests/${variant}.json"
+        local path_hash
+        path_hash="$(curl -sf "$manifest_url" | jq -r '.path_hash // empty' 2>/dev/null)" || continue
+        if [[ -z "$path_hash" ]]; then
+            echo "   SKIP: ${variant} manifest has no path_hash"
+            continue
+        fi
+        local narinfo_url="${CACHE_BASE}/${path_hash}.narinfo"
+        if curl -sf "$narinfo_url" > /dev/null 2>&1; then
+            echo "   OK: ${variant} narinfo exists"
+        else
+            echo "   FAIL: ${variant} narinfo not found at ${path_hash}.narinfo"
+            failed=1
+        fi
+    done
+
+    # 4c: Try using the cache as a Nix substituter
+    echo "   Querying Nix substituter..."
+    local store_path
+    store_path="$(curl -sf "${CACHE_BASE}/manifests/release.json" | jq -r '.store_path // empty' 2>/dev/null)"
+    if [[ -n "$store_path" ]] && command -v nix &>/dev/null; then
+        if nix path-info --store "$CACHE_BASE" "$store_path" &>/dev/null; then
+            echo "   OK: nix path-info resolved ${store_path##*/}"
+        else
+            echo "   WARN: nix path-info could not resolve from cache (non-fatal)"
+        fi
+    else
+        echo "   SKIP: nix not available or no release store_path"
+    fi
+
+    return "$failed"
+}
+
+# Step 5: Verify commit status on GitHub
 check_commit_status() {
     local sha="$1"
     local token="$2"
@@ -142,6 +207,17 @@ main() {
         echo "   Commit status is 'success'"
     else
         echo "   Commit status check failed"
+        echo ""
+        echo "=== FAIL ==="
+        exit 1
+    fi
+    echo ""
+
+    echo "4. Verifying PUSH nix cache..."
+    if check_nix_cache "$sha"; then
+        echo "   Cache verification passed"
+    else
+        echo "   Cache verification FAILED"
         echo ""
         echo "=== FAIL ==="
         exit 1
