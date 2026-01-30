@@ -11,7 +11,7 @@ buildbuild is a webhook-free CI system for Nix-based C++ projects. It polls GitH
 Five components, each in its own Git submodule:
 
 - **POLL** — Polls GitHub Events API for PushEvent/PullRequestEvent, sets commit status, triggers builds. State tracked in `~/.local/state/poll/`. Skips fork PRs for security.
-- **PULL** — Nix flake that defines 8 base build variants plus `*-test-run` overrides. Source is a flake input (`src`), overridden at build time via `--override-input src github:owner/repo/SHA`. Shell scripts orchestrate: build → export NAR → upload cache → update status. Config in `PULL/cache/config.json`.
+- **PULL** — Nix flake (flake-parts) that defines 8 base build variants plus `*-test-run` overrides. Source is a flake input (`src`), overridden at build time via `--override-input src github:owner/repo/SHA`. Shell scripts orchestrate: build → export NAR → upload cache → update status. Config in `PULL/cache/config.json`.
 - **PUSH** — Git repo serving as a binary cache. Stores uncompressed NARs (for Git delta compression), content-addressed build logs, and per-variant manifests. Implements the Nix substituter protocol.
 - **POST** — GitHub Pages dashboard with auto-refresh, historical trends, and SVG badges. Data in `POST/data/`.
 - **PROJ** — Example C++ calculator project used for testing. Makefile-based build.
@@ -71,13 +71,13 @@ Override defaults: `repo="owner/repo" poll_interval=60 build_timeout=7200 ./poll
 ## Technology Stack
 
 - **Languages**: Bash (primary), Nix (build config), C++ (test project), JavaScript (dashboard)
-- **Build**: Nix Flakes with variant-specific Nix derivations
+- **Build**: Nix Flakes with flake-parts and variant-specific Nix derivations
 - **Toolchains**: Clang/LLVM (default for most variants), GCC, musl libc — defined in `PULL/toolchains/`
 - **Requirements**: Bash 4.0+, Nix 2.18+ with flakes, curl, jq, nix-prefetch-github
 
 ## Key Files
 
-- `PULL/flake.nix` — Central Nix flake defining all build outputs
+- `PULL/flake.nix` — Central Nix flake (flake-parts) defining all build outputs
 - `PULL/cache/config.json` — Repository configuration (source, cache, status repos)
 - `PULL/variants/*/default.nix` — Per-variant build overrides (toolchain, flags)
 - `PULL/nix/base.nix` — Base package definition; `builder.nix` — CMake/Meson helpers
