@@ -16,11 +16,15 @@ get_token() {
         echo "$github_token"
         return
     fi
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        echo "$GITHUB_TOKEN"
+        return
+    fi
     if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
         gh auth token
         return
     fi
-    echo "Error: No github_token set and gh CLI not authenticated" >&2
+    echo "Error: No github_token/GITHUB_TOKEN set and gh CLI not authenticated" >&2
     return 1
 }
 
@@ -51,6 +55,7 @@ run_poll_cycle() {
     local output
     output="$(repo="$repo" \
     github_token="$token" \
+    GITHUB_TOKEN="$token" \
     poll_interval="$poll_interval" \
     PULL_DIR="${SCRIPT_DIR}/PULL" \
         bash -c 'source "'"${POLL_DIR}"'/poll"; validate_config; poll_events' 2>&1 || true)"

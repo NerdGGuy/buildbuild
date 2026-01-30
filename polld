@@ -18,11 +18,15 @@ get_token() {
         echo "$github_token"
         return
     fi
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        echo "$GITHUB_TOKEN"
+        return
+    fi
     if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
         gh auth token
         return
     fi
-    echo "Error: No github_token set and gh CLI not authenticated" >&2
+    echo "Error: No github_token/GITHUB_TOKEN set and gh CLI not authenticated" >&2
     return 1
 }
 
@@ -42,6 +46,7 @@ cmd_start() {
     echo "Starting poll daemon for ${repo}..."
     repo="$repo" \
     github_token="$token" \
+    GITHUB_TOKEN="$token" \
     poll_interval="$poll_interval" \
         nohup bash "${POLL_DIR}/poll" >> "$LOG_FILE" 2>&1 &
     local pid=$!
@@ -112,7 +117,7 @@ Commands:
 
 Environment:
   repo            Repository to poll (default: NerdGGuy/PROJ)
-  github_token    GitHub token (auto-detected from gh CLI if unset)
+  github_token    GitHub token (or GITHUB_TOKEN; auto-detected from gh CLI if unset)
   poll_interval   Seconds between polls (default: 30)
 EOF
 }
