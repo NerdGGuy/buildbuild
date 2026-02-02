@@ -168,7 +168,7 @@ The daemon polls for pushes and pull requests, builds all 8 variants (plus test-
 ./test-ci
 ```
 
-This pushes a test commit to the source repo, triggers a full poll cycle, builds all variants, and verifies the final GitHub commit status.
+This pushes a test commit to the source repo, triggers a full poll cycle, builds all variants, verifies the final GitHub commit status, and confirms that the PUSH binary cache works as a Nix substituter for local builds.
 
 ## Build Variants
 

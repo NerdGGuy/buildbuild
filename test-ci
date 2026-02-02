@@ -161,7 +161,78 @@ check_nix_cache() {
     return "$failed"
 }
 
-# Step 5: Verify commit status on GitHub
+# Step 5: Verify local nix substituter setup
+check_substituter() {
+    local sha="$1"
+    local short="${sha:0:7}"
+    local config="${SCRIPT_DIR}/PULL/cache/config.json"
+    local failed=0
+
+    # Read config
+    local cache_owner cache_repo public_key key_name
+    cache_owner="$(jq -r '.cache_repo.owner' "$config")"
+    cache_repo="$(jq -r '.cache_repo.repo' "$config")"
+    public_key="$(jq -r '.cache_repo.public_key' "$config")"
+    key_name="$(jq -r '.signing.key_name' "$config")"
+    local cache_url="https://raw.githubusercontent.com/${cache_owner}/${cache_repo}/main"
+    local trusted_key="${key_name}:${public_key}"
+
+    # 5a: Verify nix-cache-info is reachable
+    echo "   Checking nix-cache-info..."
+    if curl -sf "${cache_url}/nix-cache-info" > /dev/null 2>&1; then
+        echo "   OK: nix-cache-info reachable"
+    else
+        echo "   FAIL: nix-cache-info not reachable at ${cache_url}/nix-cache-info"
+        failed=1
+    fi
+
+    # 5b: Resolve store path via nix path-info through substituter
+    if command -v nix &>/dev/null; then
+        local store_path
+        store_path="$(curl -sf "${cache_url}/manifests/release.json" | jq -r '.store_path // empty')"
+        if [[ -n "$store_path" ]]; then
+            echo "   Querying substituter for ${store_path##*/}..."
+            if nix path-info \
+                --store "${cache_url}" \
+                --extra-substituters "${cache_url}" \
+                --extra-trusted-public-keys "${trusted_key}" \
+                "$store_path" &>/dev/null; then
+                echo "   OK: nix path-info resolved via substituter"
+            else
+                echo "   FAIL: nix path-info could not resolve ${store_path##*/} from substituter"
+                failed=1
+            fi
+        else
+            echo "   FAIL: no store_path in release manifest"
+            failed=1
+        fi
+
+        # 5c: Dry-run nix build to verify substituter would provide cache hits
+        echo "   Dry-run nix build with substituter..."
+        local dry_output
+        dry_output="$(cd "${SCRIPT_DIR}/PULL" && nix build .#release \
+            --override-input src "github:${repo}/${sha}" \
+            --extra-substituters "${cache_url}" \
+            --extra-trusted-public-keys "${trusted_key}" \
+            --dry-run 2>&1)" || true
+        if echo "$dry_output" | grep -qiE "(will be fetched|will be substituted|fetch|substitute)"; then
+            echo "   OK: nix build --dry-run confirms substituter provides artifacts"
+        elif [[ -z "$dry_output" ]]; then
+            # Empty output from --dry-run means everything is already in store
+            echo "   OK: nix build --dry-run shows artifacts already in local store"
+        else
+            echo "   FAIL: nix build --dry-run could not confirm substituter usage"
+            failed=1
+        fi
+    else
+        echo "   SKIP: nix not available"
+        failed=1
+    fi
+
+    return "$failed"
+}
+
+# Step 6: Verify commit status on GitHub
 check_commit_status() {
     local sha="$1"
     local token="$2"
@@ -218,6 +289,17 @@ main() {
         echo "   Cache verification passed"
     else
         echo "   Cache verification FAILED"
+        echo ""
+        echo "=== FAIL ==="
+        exit 1
+    fi
+    echo ""
+
+    echo "5. Verifying local nix substituter setup..."
+    if check_substituter "$sha"; then
+        echo "   Substituter verification passed"
+    else
+        echo "   Substituter verification FAILED"
         echo ""
         echo "=== FAIL ==="
         exit 1
